@@ -1,12 +1,19 @@
 {
-  "name": "socket-demo-frontend",
-  "version": "1.0.0",
-  "description": "Professional Realtime Dashboard",
-  "main": "index.html",
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
   "scripts": {
-    "start": "npx http-server -p 5500"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  "dependencies": {
+    "@fortawesome/fontawesome-free": "^7.2.0",
+    "vue": "^3.5.25"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.2",
+    "vite": "^7.3.1"
+  }
 }

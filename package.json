@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "description": "Realtime Dashboard Project",
     "scripts": {
-        "frontend": "npx http-server frontend -p 5500",
+        "frontend": "cd frontend && npm run dev",
         "backend": "cd backend && go run main.go",
         "start": "npm run frontend"
     },
