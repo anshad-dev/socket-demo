@@ -1,0 +1,13 @@
+{
+    "name": "socket-demo",
+    "version": "1.0.0",
+    "description": "Realtime Dashboard Project",
+    "scripts": {
+        "frontend": "npx http-server frontend -p 5500",
+        "backend": "cd backend && go run main.go",
+        "start": "npm run frontend"
+    },
+    "devDependencies": {
+        "http-server": "^14.1.1"
+    }
+}
