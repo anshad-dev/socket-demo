@@ -166,11 +166,11 @@ onMounted(async () => {
       </div>
       
       <nav class="nav-links">
-        <a href="#" class="nav-item active"><i class="fas fa-th-large"></i> Dashboard</a>
+        <router-link to="/" class="nav-item active"><i class="fas fa-th-large"></i> Dashboard</router-link>
         <a href="#" class="nav-item"><i class="fas fa-phone"></i> Seeded Numbers</a>
         <a href="#" class="nav-item"><i class="fas fa-broadcast-tower"></i> Monitoring</a>
         <a href="#" class="nav-item"><i class="fas fa-chart-line"></i> Analytics</a>
-        <a href="#" class="nav-item"><i class="fas fa-shield-alt"></i> Whitelist</a>
+        <router-link to="/whitelist" class="nav-item"><i class="fas fa-shield-alt"></i> Whitelist</router-link>
         <a href="#" class="nav-item"><i class="fas fa-cog"></i> Settings</a>
         <a href="#" @click.prevent="logout" class="nav-item" style="margin-top: auto; color: #ef4444;"><i class="fas fa-sign-out-alt"></i> Sign Out</a>
       </nav>

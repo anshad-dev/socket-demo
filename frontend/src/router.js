@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from './views/Login.vue'
 import Dashboard from './views/Dashboard.vue'
+import Whitelist from './views/Whitelist.vue'
 import { auth } from './firebase'
 import { onAuthStateChanged } from 'firebase/auth'
 
@@ -15,6 +16,11 @@ const routes = [
         path: '/',
         name: 'Dashboard',
         component: Dashboard
+    },
+    {
+        path: '/whitelist',
+        name: 'Whitelist',
+        component: Whitelist
     },
     {
         path: '/:pathMatch(.*)*',

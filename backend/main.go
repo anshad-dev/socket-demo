@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"sync"
 	"time"
 
@@ -55,6 +56,7 @@ func main() {
 	http.HandleFunc("/twilio/inbound", handleTwilioInbound)
 	http.Handle("/initial-data", AuthMiddleware(http.HandlerFunc(handleInitialData)))
 	http.Handle("/sync-user", AuthMiddleware(http.HandlerFunc(handleSyncUser)))
+	http.Handle("/whitelist", AuthMiddleware(http.HandlerFunc(handleWhitelist)))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -214,6 +216,11 @@ func broadcast(collection string, data bson.M) {
 				"phone":  to,
 			})
 			if count > 0 {
+				shouldSend = true
+			}
+		} else if collection == "whitelist" {
+			// If it's a new whitelist entry, only send to the owner
+			if data["userId"] == uid {
 				shouldSend = true
 			}
 		}
@@ -392,4 +399,80 @@ func handleInitialData(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+func handleWhitelist(w http.ResponseWriter, r *http.Request) {
+	uid, ok := r.Context().Value(uidKey).(string)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	whitelistCollection := db.Collection("whitelist")
+	ctx := context.TODO()
+
+	switch r.Method {
+	case "GET":
+		cursor, err := whitelistCollection.Find(ctx, bson.M{"userId": uid})
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		var list []bson.M
+		cursor.All(ctx, &list)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(list)
+
+	case "POST":
+		var body struct {
+			Phone string `json:"phone"`
+		}
+		err := json.NewDecoder(r.Body).Decode(&body)
+		if err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+
+		phone := body.Phone
+		if phone == "" {
+			http.Error(w, "Phone number is required", http.StatusBadRequest)
+			return
+		}
+
+		// Normalize phone
+		if phone[0] != '+' {
+			phone = "+" + phone
+		}
+
+		// Basic E.164 validation: + followed by 7 to 15 digits
+		phoneRegex := regexp.MustCompile(`^\+[1-9]\d{1,14}$`)
+		if !phoneRegex.MatchString(phone) {
+			http.Error(w, "Invalid phone number format. Use E.164 format (e.g., +1234567890).", http.StatusBadRequest)
+			return
+		}
+
+		// Check if already exists
+		count, _ := whitelistCollection.CountDocuments(ctx, bson.M{"userId": uid, "phone": phone})
+		if count > 0 {
+			w.WriteHeader(http.StatusOK) // Already whitelisted
+			return
+		}
+
+		doc := bson.M{
+			"userId":     uid,
+			"phone":      phone,
+			"created_at": time.Now(),
+		}
+
+		_, err = whitelistCollection.InsertOne(ctx, doc)
+		if err != nil {
+			http.Error(w, "Failed to add to whitelist", http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusCreated)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
