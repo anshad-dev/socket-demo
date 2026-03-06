@@ -7,15 +7,25 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
+	firebase "firebase.google.com/go/v4"
+	"firebase.google.com/go/v4/auth"
 	"github.com/gorilla/websocket"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"google.golang.org/api/option"
+)
+
+type contextKey string
+
+const (
+	uidKey contextKey = "uid"
 )
 
 var (
-	clients = make(map[*websocket.Conn]bool)
+	clients = make(map[*websocket.Conn]string)
 	mutex   = sync.Mutex{}
 
 	upgrader = websocket.Upgrader{
@@ -24,23 +34,27 @@ var (
 
 	client *mongo.Client
 	db     *mongo.Database
+
+	authClient *auth.Client
 )
 
 func enableCors(w *http.ResponseWriter) {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
-	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 	(*w).Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 }
 
 func main() {
 
 	connectMongo()
+	initFirebase()
 
 	go watchMongoChanges()
 
-	http.HandleFunc("/ws", handleWebSocket)
+	http.Handle("/ws", AuthMiddleware(http.HandlerFunc(handleWebSocket)))
 	http.HandleFunc("/twilio/inbound", handleTwilioInbound)
-	http.HandleFunc("/initial-data", handleInitialData)
+	http.Handle("/initial-data", AuthMiddleware(http.HandlerFunc(handleInitialData)))
+	http.Handle("/sync-user", AuthMiddleware(http.HandlerFunc(handleSyncUser)))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -71,7 +85,83 @@ func connectMongo() {
 	log.Println("MongoDB connected")
 }
 
+func initFirebase() {
+	opt := option.WithCredentialsFile("serviceAccountKey.json")
+	app, err := firebase.NewApp(context.Background(), nil, opt)
+	if err != nil {
+		log.Fatalf("error initializing app: %v\n", err)
+	}
+
+	authClient, err = app.Auth(context.Background())
+	if err != nil {
+		log.Fatalf("error getting Auth client: %v\n", err)
+	}
+	log.Println("Firebase initialized")
+}
+
+func AuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enableCors(&w)
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		idToken := r.Header.Get("Authorization")
+		source := "header"
+		if idToken == "" {
+			idToken = r.URL.Query().Get("token")
+			source = "query"
+		}
+
+		if idToken == "" {
+			// WebSocket clients (browser/devtools/extensions) may repeatedly attempt reconnects; avoid log spam on /ws.
+			if r.URL.Path != "/ws" {
+				log.Printf("Auth Error [%s]: No token provided (path=%s remote=%s)\n", source, r.URL.Path, r.RemoteAddr)
+			}
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		// Remove "Bearer " prefix if present
+		if len(idToken) > 7 && idToken[:7] == "Bearer " {
+			idToken = idToken[7:]
+		}
+
+		// Final check after stripping
+		if idToken == "" || idToken == "undefined" || idToken == "null" {
+			// WebSocket clients (browser/devtools/extensions) may repeatedly attempt reconnects; avoid log spam on /ws.
+			if r.URL.Path != "/ws" {
+				log.Printf("Auth Error [%s]: Token value is invalid (path=%s remote=%s value=%q)\n", source, r.URL.Path, r.RemoteAddr, idToken)
+			}
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		log.Printf("Attempting verification [%s] (path=%s remote=%s len=%d start=%.10s...)\n", source, r.URL.Path, r.RemoteAddr, len(idToken), idToken)
+
+		token, err := authClient.VerifyIDToken(r.Context(), idToken)
+		if err != nil {
+			log.Printf("Firebase Verify Error [%s]: %v\n", source, err)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		log.Printf("Verified ID token for user: %v\n", token.UID)
+
+		// Inject UID into context
+		ctx := context.WithValue(r.Context(), uidKey, token.UID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+
+	uid, ok := r.Context().Value(uidKey).(string)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -80,10 +170,10 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mutex.Lock()
-	clients[conn] = true
+	clients[conn] = uid
 	mutex.Unlock()
 
-	log.Println("Client connected")
+	log.Printf("Client connected: %s\n", uid)
 
 	for {
 		_, _, err := conn.ReadMessage()
@@ -100,17 +190,45 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func broadcast(data []byte) {
+func broadcast(collection string, data bson.M) {
 
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	for client := range clients {
+	for conn, uid := range clients {
+		shouldSend := false
 
-		err := client.WriteMessage(websocket.TextMessage, data)
-		if err != nil {
-			client.Close()
-			delete(clients, client)
+		if collection == "numbers" {
+			// If it's a new number, only send to the owner
+			if data["userId"] == uid {
+				shouldSend = true
+			}
+		} else if collection == "inbound_messages" {
+			// If it's a new message, check if the recipient number belongs to this user
+			to := data["to"].(string)
+
+			// We need to check if 'to' is in the user's purchased numbers
+			// Optimization: We could cache this, but for now we query DB
+			count, _ := db.Collection("numbers").CountDocuments(context.TODO(), bson.M{
+				"userId": uid,
+				"phone":  to,
+			})
+			if count > 0 {
+				shouldSend = true
+			}
+		}
+
+		if shouldSend {
+			payload := map[string]interface{}{
+				"collection": collection,
+				"data":       data,
+			}
+			jsonData, _ := json.Marshal(payload)
+			err := conn.WriteMessage(websocket.TextMessage, jsonData)
+			if err != nil {
+				conn.Close()
+				delete(clients, conn)
+			}
 		}
 	}
 }
@@ -143,16 +261,8 @@ func watchMongoChanges() {
 			continue
 		}
 
-		payload := map[string]interface{}{
-			"collection": collection,
-			"data":       fullDoc,
-		}
-
-		log.Println("Change detected:", payload)
-
-		jsonData, _ := json.Marshal(payload)
-
-		broadcast(jsonData)
+		doc := fullDoc.(bson.M)
+		broadcast(collection.(string), doc)
 	}
 }
 
@@ -172,16 +282,24 @@ func handleTwilioInbound(w http.ResponseWriter, r *http.Request) {
 
 	from := r.FormValue("From")
 	to := r.FormValue("To")
-	body := r.FormValue("Body")
+	body := r.FormValue("Text")
+
+	if from != "" && from[0] != '+' {
+		from = "+" + from
+	}
+	if to != "" && to[0] != '+' {
+		to = "+" + to
+	}
 
 	log.Println("Inbound SMS:", from, to, body)
 
 	inboundCollection := db.Collection("inbound_messages")
 
 	doc := bson.M{
-		"from": from,
-		"to":   to,
-		"body": body,
+		"from":        from,
+		"to":          to,
+		"body":        body,
+		"received_at": time.Now(),
 	}
 
 	_, err = inboundCollection.InsertOne(context.TODO(), doc)
@@ -192,11 +310,51 @@ func handleTwilioInbound(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+
+func handleSyncUser(w http.ResponseWriter, r *http.Request) {
+	uid, ok := r.Context().Value(uidKey).(string)
+	if !ok {
+		log.Println("SyncUser Error: No UID found in context (Unauthorized)")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	log.Printf("SyncUser: Received sync request for UID: %s\n", uid)
+	usersCollection := db.Collection("users")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Check if user already exists
+	var existingUser bson.M
+	err := usersCollection.FindOne(ctx, bson.M{"uid": uid}).Decode(&existingUser)
+
+	if err == mongo.ErrNoDocuments {
+		// User doesn't exist, create a new record
+		newUser := bson.M{
+			"uid":        uid,
+			"created_at": time.Now(),
+		}
+		_, err := usersCollection.InsertOne(ctx, newUser)
+		if err != nil {
+			log.Printf("Error creating user: %v\n", err)
+			http.Error(w, "Failed to create user", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("New user record created for: %s\n", uid)
+	} else if err != nil {
+		log.Printf("Error querying user: %v\n", err)
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
 func handleInitialData(w http.ResponseWriter, r *http.Request) {
 
-	enableCors(&w)
-
-	if r.Method == "OPTIONS" {
+	uid, ok := r.Context().Value(uidKey).(string)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -205,13 +363,27 @@ func handleInitialData(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.TODO()
 
-	inboundCursor, _ := inboundCollection.Find(ctx, bson.M{})
-	var inbound []bson.M
-	inboundCursor.All(ctx, &inbound)
-
-	numbersCursor, _ := numbersCollection.Find(ctx, bson.M{})
+	// 1. Fetch numbers owned by this user
+	numbersCursor, _ := numbersCollection.Find(ctx, bson.M{"userId": uid})
 	var numbers []bson.M
 	numbersCursor.All(ctx, &numbers)
+
+	// 2. Extract phone numbers to filter inbound messages
+	var userPhoneNumbers []string
+	for _, n := range numbers {
+		if phone, ok := n["phone"].(string); ok {
+			userPhoneNumbers = append(userPhoneNumbers, phone)
+		}
+	}
+
+	// 3. Fetch inbound messages sent to the user's numbers
+	var inbound []bson.M
+	if len(userPhoneNumbers) > 0 {
+		inboundCursor, _ := inboundCollection.Find(ctx, bson.M{
+			"to": bson.M{"$in": userPhoneNumbers},
+		})
+		inboundCursor.All(ctx, &inbound)
+	}
 
 	response := map[string]interface{}{
 		"inbound_messages": inbound,
