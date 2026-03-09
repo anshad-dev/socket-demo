@@ -10,9 +10,12 @@ const stats = ref({
     volume_chart: [],
     sender_stats: { total: 0, unique: 0, repeated: 0 },
     top_senders: [],
-    top_numbers: []
+    top_numbers: [],
+    available_numbers: []
 })
 const isLoading = ref(true)
+const selectedDays = ref(7)
+const selectedPhone = ref('')
 let volumeChart = null
 
 const getCurrentUser = () => {
@@ -38,11 +41,26 @@ const fetchAnalytics = async () => {
   const token = await getIdTokenSafe()
   if (!token) return
 
+  isLoading.value = true
   try {
-    const res = await fetch("http://localhost:8080/analytics", {
+    const url = new URL("http://localhost:8080/analytics")
+    url.searchParams.append("days", selectedDays.value)
+    if (selectedPhone.value) {
+        url.searchParams.append("phone", selectedPhone.value)
+    }
+
+    const res = await fetch(url.toString(), {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-    stats.value = await res.json()
+    const data = await res.json()
+    // Ensure nested objects exist to prevent template errors
+    stats.value = {
+        volume_chart: data.volume_chart || [],
+        sender_stats: data.sender_stats || { total: 0, unique: 0, repeated: 0 },
+        top_senders: data.top_senders || [],
+        top_numbers: data.top_numbers || [],
+        available_numbers: data.available_numbers || []
+    }
     isLoading.value = false
     await nextTick()
     renderCharts()
@@ -53,49 +71,60 @@ const fetchAnalytics = async () => {
 }
 
 const renderCharts = () => {
-    const ctx = document.getElementById('volumeChart')?.getContext('2d')
-    if (!ctx) return
+    // Small delay to ensure DOM is fully ready even after nextTick
+    setTimeout(() => {
+        const canvas = document.getElementById('volumeChart')
+        if (!canvas) {
+            console.warn("Chart canvas not found")
+            return
+        }
 
-    if (volumeChart) volumeChart.destroy()
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
 
-    const labels = stats.value.volume_chart.map(d => d._id)
-    const data = stats.value.volume_chart.map(d => d.count)
+        if (volumeChart) volumeChart.destroy()
 
-    volumeChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Inbound Volume',
-                data: data,
-                borderColor: '#3b82f6',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                fill: true,
-                tension: 0.4,
-                borderWidth: 3,
-                pointBackgroundColor: '#3b82f6',
-                pointRadius: 4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false }
+        const labels = stats.value.volume_chart?.map(d => d._id) || []
+        const data = stats.value.volume_chart?.map(d => d.count) || []
+
+        console.log("Rendering chart with labels:", labels)
+
+        volumeChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Inbound Volume',
+                    data: data,
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    fill: true,
+                    tension: 0.4,
+                    borderWidth: 3,
+                    pointBackgroundColor: '#3b82f6',
+                    pointRadius: 4
+                }]
             },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    grid: { color: 'rgba(255, 255, 255, 0.05)' },
-                    ticks: { color: '#94a3b8' }
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
                 },
-                x: {
-                    grid: { display: false },
-                    ticks: { color: '#94a3b8' }
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                        ticks: { color: '#94a3b8' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#94a3b8' }
+                    }
                 }
             }
-        }
-    })
+        })
+    }, 100)
 }
 
 const logout = async () => {
@@ -134,9 +163,36 @@ onUnmounted(() => {
 
     <!-- Main Content -->
     <main class="main-content">
-      <header class="header">
-        <h1>Analytics Insights 📊</h1>
-        <p>Comprehensive breakdown of your inbound traffic and sender patterns.</p>
+      <header class="header" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 2.5rem;">
+        <div>
+            <h1>Analytics Insights 📊</h1>
+            <p>Comprehensive breakdown of your inbound traffic and sender patterns.</p>
+        </div>
+
+        <div class="filters-container">
+            <!-- Days Filter (Segmented) -->
+            <div class="segment-filter">
+                <button 
+                    v-for="d in [1, 3, 5, 7]" 
+                    :key="d" 
+                    @click="selectedDays = d; fetchAnalytics()"
+                    :class="{ active: selectedDays === d }"
+                >
+                    {{ d }}d
+                </button>
+            </div>
+
+            <!-- Phone Filter -->
+            <div class="select-wrapper">
+                <i class="fas fa-phone"></i>
+                <select v-model="selectedPhone" @change="fetchAnalytics">
+                    <option value="">All Numbers</option>
+                    <option v-for="num in stats.available_numbers" :key="num" :value="num">
+                        {{ num }}
+                    </option>
+                </select>
+            </div>
+        </div>
       </header>
 
       <div v-if="isLoading" class="loading-state">
@@ -149,7 +205,7 @@ onUnmounted(() => {
         <div class="card chart-card">
           <div class="card-header">
             <h3>Inbound Volume</h3>
-            <span class="trend positive"><i class="fas fa-arrow-up"></i> Last 7 Days</span>
+            <span class="trend positive"><i class="fas fa-arrow-up"></i> Last {{ selectedDays }} Days</span>
           </div>
           <div class="chart-container">
             <canvas id="volumeChart"></canvas>
@@ -196,16 +252,18 @@ onUnmounted(() => {
         <div class="card list-card">
           <h3>Traffic per Number</h3>
           <div class="rank-list">
-            <div v-for="item in stats.top_numbers" :key="item._id" class="rank-item">
-               <div class="rank-info">
-                <span class="rank-name">{{ item._id }}</span>
-                <div class="progress-bar">
-                    <div class="progress-fill" :style="{ width: (item.count / stats.top_numbers[0].count * 100) + '%' }"></div>
+            <template v-if="stats.top_numbers?.length">
+              <div v-for="item in stats.top_numbers" :key="item._id" class="rank-item">
+                <div class="rank-info">
+                  <span class="rank-name">{{ item._id }}</span>
+                  <div class="progress-bar">
+                      <div class="progress-fill" :style="{ width: (stats.top_numbers[0]?.count ? (item.count / stats.top_numbers[0].count * 100) : 0) + '%' }"></div>
+                  </div>
                 </div>
+                <span class="rank-count">{{ item.count }}</span>
               </div>
-              <span class="rank-count">{{ item.count }}</span>
-            </div>
-             <div v-if="stats.top_numbers.length === 0" class="empty-state">No data available</div>
+            </template>
+            <div v-else class="empty-state">No data available for this selection</div>
           </div>
         </div>
       </div>
@@ -225,6 +283,80 @@ onUnmounted(() => {
 }
 
 .loading-state i { font-size: 2rem; color: var(--accent-blue); }
+
+.filters-container {
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+}
+
+.segment-filter {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--border-color);
+    padding: 2px;
+    border-radius: 10px;
+    display: flex;
+    gap: 2px;
+}
+
+.segment-filter button {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.segment-filter button:hover {
+    color: var(--text-primary);
+}
+
+.segment-filter button.active {
+    background: var(--accent-blue);
+    color: white;
+}
+
+.select-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.select-wrapper i {
+    position: absolute;
+    left: 1rem;
+    font-size: 0.8rem;
+    color: var(--accent-blue);
+    pointer-events: none;
+}
+
+.select-wrapper select {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    color: var(--text-primary);
+    padding: 0.6rem 2.5rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    min-width: 180px;
+}
+
+.select-wrapper::after {
+    content: '\f078';
+    font-family: 'Font Awesome 5 Free';
+    font-weight: 900;
+    position: absolute;
+    right: 1rem;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    pointer-events: none;
+}
 
 .analytics-grid {
     display: grid;

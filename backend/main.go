@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -503,32 +504,77 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	inboundCollection := db.Collection("inbound_messages")
 	ctx := context.TODO()
 
+	// Get filter parameters
+	daysStr := r.URL.Query().Get("days")
+	days := 7 // Default to 7 days
+	if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
+		days = d
+	}
+	targetPhone := r.URL.Query().Get("phone")
+
 	// 1. Get user's numbers
 	numbersCursor, _ := numbersCollection.Find(ctx, bson.M{"userId": uid})
 	var numbers []bson.M
 	numbersCursor.All(ctx, &numbers)
 
 	var userPhoneNumbers []string
+	var availableNumbers []string
 	for _, n := range numbers {
 		if phone, ok := n["phone"].(string); ok {
 			userPhoneNumbers = append(userPhoneNumbers, phone)
+			availableNumbers = append(availableNumbers, phone)
+		}
+	}
+
+	// Filter userPhoneNumbers if a target phone is specified
+	if targetPhone != "" {
+		found := false
+		for _, p := range userPhoneNumbers {
+			if p == targetPhone {
+				found = true
+				break
+			}
+		}
+		if found {
+			userPhoneNumbers = []string{targetPhone}
+		} else {
+			// If filtered number doesn't belong to user, return empty but with number list
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"volume_chart":      []interface{}{},
+				"sender_stats":      map[string]int{"total": 0, "unique": 0, "repeated": 0},
+				"top_senders":       []interface{}{},
+				"top_numbers":       []interface{}{},
+				"available_numbers": availableNumbers,
+			})
+			return
 		}
 	}
 
 	if len(userPhoneNumbers) == 0 {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"volume_chart": []interface{}{},
-			"sender_stats": map[string]int{"unique": 0, "repeated": 0},
-			"top_senders":  []interface{}{},
-			"top_numbers":  []interface{}{},
+			"volume_chart":      []interface{}{},
+			"sender_stats":      map[string]int{"total": 0, "unique": 0, "repeated": 0},
+			"top_senders":       []interface{}{},
+			"top_numbers":       []interface{}{},
+			"available_numbers": availableNumbers,
 		})
 		return
 	}
 
+	// Calculate start time based on 'days'
+	startTime := time.Now().AddDate(0, 0, -days)
+
+	// Base filter for messages
+	matchFilter := bson.M{
+		"to":          bson.M{"$in": userPhoneNumbers},
+		"received_at": bson.M{"$gte": startTime},
+	}
+
 	// 2. Aggregate Volume by Day
 	volumePipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"to": bson.M{"$in": userPhoneNumbers}}}},
+		{{Key: "$match", Value: matchFilter}},
 		{{Key: "$group", Value: bson.M{
 			"_id":   bson.M{"$dateToString": bson.M{"format": "%Y-%m-%d", "date": "$received_at"}},
 			"count": bson.M{"$sum": 1},
@@ -536,19 +582,19 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		{{Key: "$sort", Value: bson.M{"_id": 1}}},
 	}
 	volumeCursor, _ := inboundCollection.Aggregate(ctx, volumePipeline)
-	var volumeData []bson.M
+	volumeData := []bson.M{}
 	volumeCursor.All(ctx, &volumeData)
 
 	// 3. Sender Statistics (Unique vs Repeated)
 	senderPipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"to": bson.M{"$in": userPhoneNumbers}}}},
+		{{Key: "$match", Value: matchFilter}},
 		{{Key: "$group", Value: bson.M{
 			"_id":   "$from",
 			"count": bson.M{"$sum": 1},
 		}}},
 	}
 	senderCursor, _ := inboundCollection.Aggregate(ctx, senderPipeline)
-	var senders []bson.M
+	senders := []bson.M{}
 	senderCursor.All(ctx, &senders)
 
 	unique := 0
@@ -572,7 +618,7 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 
 	// 4. Top Senders
 	topSendersPipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"to": bson.M{"$in": userPhoneNumbers}}}},
+		{{Key: "$match", Value: matchFilter}},
 		{{Key: "$group", Value: bson.M{
 			"_id":   "$from",
 			"count": bson.M{"$sum": 1},
@@ -581,12 +627,12 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		{{Key: "$limit", Value: 5}},
 	}
 	topSendersCursor, _ := inboundCollection.Aggregate(ctx, topSendersPipeline)
-	var topSenders []bson.M
+	topSenders := []bson.M{}
 	topSendersCursor.All(ctx, &topSenders)
 
 	// 5. Messages per Seeded Number
 	perNumPipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"to": bson.M{"$in": userPhoneNumbers}}}},
+		{{Key: "$match", Value: matchFilter}},
 		{{Key: "$group", Value: bson.M{
 			"_id":   "$to",
 			"count": bson.M{"$sum": 1},
@@ -594,7 +640,7 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		{{Key: "$sort", Value: bson.M{"count": -1}}},
 	}
 	perNumCursor, _ := inboundCollection.Aggregate(ctx, perNumPipeline)
-	var perNum []bson.M
+	perNum := []bson.M{}
 	perNumCursor.All(ctx, &perNum)
 
 	response := map[string]interface{}{
@@ -604,8 +650,9 @@ func handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			"unique":   unique,
 			"repeated": repeated,
 		},
-		"top_senders": topSenders,
-		"top_numbers": perNum,
+		"top_senders":       topSenders,
+		"top_numbers":       perNum,
+		"available_numbers": availableNumbers,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
