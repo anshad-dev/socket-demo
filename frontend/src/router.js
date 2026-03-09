@@ -3,6 +3,7 @@ import Login from './views/Login.vue'
 import Dashboard from './views/Dashboard.vue'
 import Whitelist from './views/Whitelist.vue'
 import SeededNumbers from './views/SeededNumbers.vue'
+import Analytics from './views/Analytics.vue'
 import { auth } from './firebase'
 import { onAuthStateChanged } from 'firebase/auth'
 
@@ -27,6 +28,11 @@ const routes = [
         path: '/seeded-numbers',
         name: 'SeededNumbers',
         component: SeededNumbers
+    },
+    {
+        path: '/analytics',
+        name: 'Analytics',
+        component: Analytics
     },
     {
         path: '/:pathMatch(.*)*',

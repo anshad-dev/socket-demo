@@ -57,6 +57,7 @@ func main() {
 	http.Handle("/initial-data", AuthMiddleware(http.HandlerFunc(handleInitialData)))
 	http.Handle("/sync-user", AuthMiddleware(http.HandlerFunc(handleSyncUser)))
 	http.Handle("/whitelist", AuthMiddleware(http.HandlerFunc(handleWhitelist)))
+	http.Handle("/analytics", AuthMiddleware(http.HandlerFunc(handleAnalytics)))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -489,4 +490,124 @@ func handleWhitelist(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func handleAnalytics(w http.ResponseWriter, r *http.Request) {
+	uid, ok := r.Context().Value(uidKey).(string)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	numbersCollection := db.Collection("numbers")
+	inboundCollection := db.Collection("inbound_messages")
+	ctx := context.TODO()
+
+	// 1. Get user's numbers
+	numbersCursor, _ := numbersCollection.Find(ctx, bson.M{"userId": uid})
+	var numbers []bson.M
+	numbersCursor.All(ctx, &numbers)
+
+	var userPhoneNumbers []string
+	for _, n := range numbers {
+		if phone, ok := n["phone"].(string); ok {
+			userPhoneNumbers = append(userPhoneNumbers, phone)
+		}
+	}
+
+	if len(userPhoneNumbers) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"volume_chart": []interface{}{},
+			"sender_stats": map[string]int{"unique": 0, "repeated": 0},
+			"top_senders":  []interface{}{},
+			"top_numbers":  []interface{}{},
+		})
+		return
+	}
+
+	// 2. Aggregate Volume by Day
+	volumePipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"to": bson.M{"$in": userPhoneNumbers}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   bson.M{"$dateToString": bson.M{"format": "%Y-%m-%d", "date": "$received_at"}},
+			"count": bson.M{"$sum": 1},
+		}}},
+		{{Key: "$sort", Value: bson.M{"_id": 1}}},
+	}
+	volumeCursor, _ := inboundCollection.Aggregate(ctx, volumePipeline)
+	var volumeData []bson.M
+	volumeCursor.All(ctx, &volumeData)
+
+	// 3. Sender Statistics (Unique vs Repeated)
+	senderPipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"to": bson.M{"$in": userPhoneNumbers}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   "$from",
+			"count": bson.M{"$sum": 1},
+		}}},
+	}
+	senderCursor, _ := inboundCollection.Aggregate(ctx, senderPipeline)
+	var senders []bson.M
+	senderCursor.All(ctx, &senders)
+
+	unique := 0
+	repeated := 0
+	for _, s := range senders {
+		countValue := s["count"]
+		var count int64
+		switch v := countValue.(type) {
+		case int32:
+			count = int64(v)
+		case int64:
+			count = v
+		}
+
+		if count > 1 {
+			repeated++
+		} else {
+			unique++
+		}
+	}
+
+	// 4. Top Senders
+	topSendersPipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"to": bson.M{"$in": userPhoneNumbers}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   "$from",
+			"count": bson.M{"$sum": 1},
+		}}},
+		{{Key: "$sort", Value: bson.M{"count": -1}}},
+		{{Key: "$limit", Value: 5}},
+	}
+	topSendersCursor, _ := inboundCollection.Aggregate(ctx, topSendersPipeline)
+	var topSenders []bson.M
+	topSendersCursor.All(ctx, &topSenders)
+
+	// 5. Messages per Seeded Number
+	perNumPipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"to": bson.M{"$in": userPhoneNumbers}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   "$to",
+			"count": bson.M{"$sum": 1},
+		}}},
+		{{Key: "$sort", Value: bson.M{"count": -1}}},
+	}
+	perNumCursor, _ := inboundCollection.Aggregate(ctx, perNumPipeline)
+	var perNum []bson.M
+	perNumCursor.All(ctx, &perNum)
+
+	response := map[string]interface{}{
+		"volume_chart": volumeData,
+		"sender_stats": map[string]int{
+			"total":    len(senders),
+			"unique":   unique,
+			"repeated": repeated,
+		},
+		"top_senders": topSenders,
+		"top_numbers": perNum,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
