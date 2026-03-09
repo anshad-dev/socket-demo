@@ -42,7 +42,7 @@ var (
 func enableCors(w *http.ResponseWriter) {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
 	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-	(*w).Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	(*w).Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE")
 }
 
 func main() {
@@ -471,6 +471,20 @@ func handleWhitelist(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.WriteHeader(http.StatusCreated)
+
+	case "DELETE":
+		phone := r.URL.Query().Get("phone")
+		if phone == "" {
+			http.Error(w, "Phone number is required", http.StatusBadRequest)
+			return
+		}
+
+		_, err := whitelistCollection.DeleteOne(ctx, bson.M{"userId": uid, "phone": phone})
+		if err != nil {
+			http.Error(w, "Failed to remove from whitelist", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

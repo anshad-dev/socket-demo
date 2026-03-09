@@ -238,7 +238,7 @@ onMounted(async () => {
             </div>
             <div class="status-detail">
               <span class="status-label">Provider:</span>
-              <span>Twilio</span>
+              <span>Plivo</span>
             </div>
             <div class="status-detail">
               <span class="status-label">Webhook:</span>
@@ -255,7 +255,6 @@ onMounted(async () => {
                 <div v-for="num in numbers" :key="num.phone" class="status-detail" style="padding: 0.5rem 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
                     <div style="display: flex; flex-direction: column;">
                         <span style="font-weight: 500;">{{ num.phone }}</span>
-                        <span style="font-size: 0.7rem; color: var(--text-secondary);">User ID: {{ num.userId }}</span>
                     </div>
                 </div>
                 <div v-if="numbers.length === 0" class="status-label" style="text-align: center; padding: 1rem;">

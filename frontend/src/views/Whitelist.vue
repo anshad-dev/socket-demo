@@ -10,6 +10,9 @@ const whitelist = ref([])
 const newNumber = ref('')
 const socket = ref(null)
 const isPhoneValid = ref(false)
+const showDeleteConfirm = ref(false)
+const numberToDelete = ref('')
+const isDeleting = ref(false)
 
 const getCurrentUser = () => {
   return new Promise((resolve, reject) => {
@@ -91,6 +94,46 @@ const addToWhitelist = async () => {
     } catch (err) {
         console.error("Error adding to whitelist:", err)
         errorMessage.value = 'Network error. Please try again.'
+    }
+}
+
+const confirmDelete = (phone) => {
+    numberToDelete.value = phone
+    showDeleteConfirm.value = true
+}
+
+const cancelDelete = () => {
+    showDeleteConfirm.value = false
+    numberToDelete.value = ''
+}
+
+const removeFromWhitelist = async () => {
+    if (!numberToDelete.value) return
+    
+    isDeleting.value = true
+    const phone = numberToDelete.value
+    const token = await getIdTokenSafe()
+    
+    try {
+        const res = await fetch(`http://localhost:8080/whitelist?phone=${encodeURIComponent(phone)}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            }
+        })
+        if (res.ok) {
+            whitelist.value = whitelist.value.filter(item => item.phone !== phone)
+            showDeleteConfirm.value = false
+        } else {
+            const data = await res.text()
+            alert(data || 'Failed to remove number')
+        }
+    } catch (err) {
+        console.error("Error removing from whitelist:", err)
+        alert('Network error. Please try again.')
+    } finally {
+        isDeleting.value = false
+        numberToDelete.value = ''
     }
 }
 
@@ -244,7 +287,12 @@ onMounted(async () => {
                   </span>
                 </td>
                 <td style="text-align: right; padding-right: 1.5rem;">
-                   <button style="background: none; border: none; color: #94a3b8; cursor: pointer; padding: 0.5rem; border-radius: 6px; transition: all 0.2s;" onmouseover="this.style.color='#ef4444'; this.style.background='rgba(239, 68, 68, 0.1)'" onmouseout="this.style.color='#94a3b8'; this.style.background='none'">
+                   <button 
+                     @click="confirmDelete(item.phone)"
+                     style="background: none; border: none; color: #94a3b8; cursor: pointer; padding: 0.5rem; border-radius: 6px; transition: all 0.2s;" 
+                     onmouseover="this.style.color='#ef4444'; this.style.background='rgba(239, 68, 68, 0.1)'" 
+                     onmouseout="this.style.color='#94a3b8'; this.style.background='none'"
+                    >
                      <i class="fas fa-trash"></i>
                    </button>
                 </td>
@@ -262,6 +310,30 @@ onMounted(async () => {
         </div>
       </div>
     </main>
+
+    <!-- Custom Delete Modal -->
+    <transition name="modal-fade">
+      <div v-if="showDeleteConfirm" class="modal-overlay" @click.self="cancelDelete">
+        <div class="modal-content">
+          <div class="modal-header">
+            <div class="modal-icon-container">
+              <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <h3>Confirm Removal</h3>
+          </div>
+          <div class="modal-body">
+            <p>Are you sure you want to remove <span class="highlight-number">{{ numberToDelete }}</span> from your whitelist? This action cannot be undone.</p>
+          </div>
+          <div class="modal-footer">
+            <button class="modal-btn-cancel" @click="cancelDelete" :disabled="isDeleting">Cancel</button>
+            <button class="modal-btn-delete" @click="removeFromWhitelist" :disabled="isDeleting">
+              <span v-if="!isDeleting">Remove Number</span>
+              <span v-else><i class="fas fa-spinner fa-spin"></i> Removing...</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -429,5 +501,130 @@ onMounted(async () => {
     width: 100%;
     min-width: unset;
   }
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #0f172a;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 400px;
+  padding: 1.5rem;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+  animation: modal-slide-up 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes modal-slide-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  text-align: center;
+}
+
+.modal-icon-container {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.modal-body p {
+  color: var(--text-secondary);
+  line-height: 1.6;
+  text-align: center;
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.highlight-number {
+  color: #f8fafc;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.modal-footer {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.modal-footer button {
+  flex: 1;
+  height: 44px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.modal-btn-cancel {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.modal-btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+}
+
+.modal-btn-delete {
+  background: #ef4444;
+  border: none;
+  color: white;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+}
+
+.modal-btn-delete:hover:not(:disabled) {
+  background: #dc2626;
+  transform: translateY(-1px);
+}
+
+.modal-btn-delete:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Modal Transitions */
+.modal-fade-enter-active, .modal-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.modal-fade-enter-from, .modal-fade-leave-to {
+  opacity: 0;
 }
 </style>
