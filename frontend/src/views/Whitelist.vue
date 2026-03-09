@@ -64,7 +64,7 @@ const onValidate = (isValid) => {
 
 const addToWhitelist = async () => {
     errorMessage.value = ''
-    let phone = newNumber.value.trim()
+    let phone = newNumber.value.replace(/\s+/g, '').trim()
     if (!phone) return
 
     if (!isPhoneValid.value) {
@@ -172,43 +172,37 @@ onMounted(async () => {
 
     <!-- Main Content -->
     <main class="main-content">
-      <header class="header" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 2rem;">
-        <div style="flex: 1;">
-            <h1>Whitelist Management 🛡️</h1>
-            <p>Numbers explicitly allowed to interact with your seeded numbers.</p>
+      <header class="header-section">
+        <div class="header-info">
+            <h1>Whitelist Management <span class="shield-icon">🛡️</span></h1>
+            <p>Restrict interactions to these authorized phone numbers only.</p>
         </div>
         
         <!-- Quick Add Section -->
-        <div class="card" style="margin: 0; min-width: 400px; padding: 1.25rem; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);">
-            <div style="display: flex; gap: 0.75rem;">
-                <div style="flex: 1; display: flex; flex-direction: column; gap: 0.5rem;">
+        <div class="quick-add-card">
+            <div class="quick-add-container">
+                <div class="input-wrapper">
                     <TelInput 
                         v-model="newNumber" 
                         placeholder="+1 234 567 890" 
+                        class="custom-tel-input"
                         @validate="onValidate"
                         @keyup.enter="isPhoneValid && addToWhitelist()"
                     />
-                    <span v-if="errorMessage" style="color: #ef4444; font-size: 0.75rem; margin-top: -0.25rem; font-weight: 500;">
-                        {{ errorMessage }}
-                    </span>
+                    <transition name="fade">
+                      <span v-if="errorMessage" class="error-msg">
+                          {{ errorMessage }}
+                      </span>
+                    </transition>
                 </div>
                 <button 
                     @click="addToWhitelist"
                     :disabled="!isPhoneValid"
-                    :style="{
-                        height: '42px', 
-                        padding: '0 1.25rem', 
-                        borderRadius: '8px', 
-                        border: 'none', 
-                        background: isPhoneValid ? '#3b82f6' : '#1e293b', 
-                        color: isPhoneValid ? 'white' : '#64748b', 
-                        cursor: isPhoneValid ? 'pointer' : 'not-allowed', 
-                        fontWeight: '600', 
-                        fontSize: '0.85rem', 
-                        transition: 'all 0.2s'
-                    }"
+                    class="add-btn"
+                    :class="{ 'btn-enabled': isPhoneValid }"
                 >
-                    Add Number
+                    <i class="fas fa-plus"></i>
+                    <span>Add Number</span>
                 </button>
             </div>
         </div>
@@ -270,3 +264,170 @@ onMounted(async () => {
     </main>
   </div>
 </template>
+
+<style scoped>
+.header-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2.5rem;
+  gap: 2rem;
+}
+
+.header-info h1 {
+  font-size: 1.85rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.shield-icon {
+  font-size: 1.5rem;
+  filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.3));
+}
+
+.header-info p {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.quick-add-card {
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1rem;
+  min-width: 420px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.quick-add-container {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.input-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.error-msg {
+  color: #ef4444;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding-left: 4px;
+}
+
+.add-btn {
+  height: 42px;
+  padding: 0 1.25rem;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: #1e293b;
+  color: #64748b;
+  cursor: not-allowed;
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.add-btn i {
+  font-size: 0.8rem;
+}
+
+.add-btn.btn-enabled {
+  background: #3b82f6;
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+  border: 1px solid var(--border-color);
+}
+
+.add-btn.btn-enabled:hover {
+  background: #2563eb;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 15px rgba(59, 130, 246, 0.35);
+}
+
+.add-btn.btn-enabled:active {
+  transform: translateY(0);
+}
+
+/* Transitions */
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}
+
+/* Deep selection for TelInput styling to match theme */
+:deep(.custom-tel-input .vue-tel-input) {
+  border: 1px solid var(--border-color) !important;
+  background-color: rgba(0, 0, 0, 0.2) !important;
+  border-radius: 8px !important;
+  height: 42px !important;
+  transition: all 0.2s !important;
+}
+
+:deep(.custom-tel-input .vue-tel-input:focus-within) {
+  border-color: var(--accent-blue) !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+  background-color: rgba(0, 0, 0, 0.3) !important;
+}
+
+:deep(.custom-tel-input .vti__input) {
+  background-color: transparent !important;
+  color: white !important;
+  font-size: 0.9rem !important;
+}
+
+:deep(.custom-tel-input .vti__dropdown) {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+  border-right: 1px solid var(--border-color) !important;
+  border-radius: 8px 0 0 8px !important;
+}
+
+:deep(.custom-tel-input .vti__dropdown:hover) {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+:deep(.custom-tel-input .vti__selection .vti__country-code) {
+  color: #94a3b8 !important;
+}
+
+:deep(.custom-tel-input .vti__dropdown-list) {
+  background-color: #0f172a !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5) !important;
+}
+
+:deep(.custom-tel-input .vti__dropdown-item) {
+  color: #f8fafc !important;
+}
+
+:deep(.custom-tel-input .vti__dropdown-item.highlighted) {
+  background-color: #1e293b !important;
+}
+
+@media (max-width: 1024px) {
+  .header-section {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .quick-add-card {
+    width: 100%;
+    min-width: unset;
+  }
+}
+</style>
